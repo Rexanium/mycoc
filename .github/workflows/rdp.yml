@@ -4,8 +4,7 @@ on: workflow_dispatch
 jobs:
   secure-rdp:
     runs-on: windows-latest
-    timeout-minutes: 3600  # Note: This is a very long timeout; consider reducing if not necessary.
-    
+    timeout-minutes: 3600
     steps:
       - name: Configure Core RDP Settings
         run: |
@@ -21,8 +20,6 @@ jobs:
           netsh advfirewall firewall delete rule name="RDP-Tailscale"
           
           # For testing, allow any incoming connection on port 3389
-          # WARNING: This allows connections from any IP, which is insecure. 
-          # Consider restricting to Tailscale IPs for production (e.g., using Tailscale's firewall or dynamic rules).
           netsh advfirewall firewall add rule name="RDP-Tailscale" `
                  dir=in action=allow protocol=TCP localport=3389
           
@@ -45,27 +42,26 @@ jobs:
           $rawPassword += $charSet.Special | Get-Random -Count 4
           $password = -join ($rawPassword | Sort-Object { Get-Random })
           $securePass = ConvertTo-SecureString $password -AsPlainText -Force
-          New-LocalUser -Name "Kydale" -Password $securePass -AccountNeverExpires
-          Add-LocalGroupMember -Group "Administrators" -Member "Kydale"
-          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "Kydale"
-          echo "RDP_CREDS=User: Kydale | Password: $password" >> $env:GITHUB_ENV
-          if (-not (Get-LocalUser -Name "Kydale")) {
+          New-LocalUser -Name "Rexanium" -Password $securePass -AccountNeverExpires
+          Add-LocalGroupMember -Group "Administrators" -Member "Rexanium"
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "Rexanium"
+          echo "RDP_CREDS=User: Rexanium | Password: $password" >> $env:GITHUB_ENV
+          if (-not (Get-LocalUser -Name "Rexanium")) {
             Write-Error "User creation failed"
             exit 1
           }
 
       - name: Install Tailscale
         run: |
-          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"  # Consider using the latest version if available
+          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.88.4-amd64.msi"                                               
           $installerPath = "$env:TEMP\tailscale.msi"
           Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
-          Start-Process msiexec.exe -ArgumentList "/i "$installerPath" /quiet /norestart" -Wait  # Fixed invalid argument list
+          Start-Process msiexec.exe -ArgumentList "/i",                     , "/quiet", "/norestart" -Wait
           Remove-Item $installerPath -Force
 
       - name: Establish Tailscale Connection
         run: |
           & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-runner-$env:GITHUB_RUN_ID
-          
           $tsIP = $null
           $retries = 0
           while (-not $tsIP -and $retries -lt 10) {
@@ -82,7 +78,7 @@ jobs:
       - name: Verify RDP Accessibility
         run: |
           Write-Host "Tailscale IP: $env:TAILSCALE_IP"
-          
+                                                                                            
           $testResult = Test-NetConnection -ComputerName $env:TAILSCALE_IP -Port 3389
           if (-not $testResult.TcpTestSucceeded) {
             Write-Error "TCP connection to RDP port 3389 failed"
@@ -94,10 +90,11 @@ jobs:
         run: |
           Write-Host "`n=== RDP ACCESS ==="
           Write-Host "Address: $env:TAILSCALE_IP"
-          Write-Host "Username: Kydale"
-          Write-Host "Password: $env:RDP_CREDS"  # Fixed to directly use the environment variable
+          Write-Host "Username: Rexanium"
+          Write-Host "Password: $(echo $env:RDP_CREDS)"
           Write-Host "==================`n"
           
+                                                                         
           while ($true) {
             Write-Host "[$(Get-Date)] RDP Active - Use Ctrl+C in workflow to terminate"
             Start-Sleep -Seconds 300
