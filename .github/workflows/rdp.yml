@@ -56,7 +56,7 @@ jobs:
 
       - name: Install Tailscale
         run: |
-          $tsUrl = "https://dl.tailscale.com/stable/tailscale-setup-full-1.88.4.exe"  # Consider using the latest version if available
+          $tsUrl = "https://dl.tailscale.com/stable/tailscale-setup-1.88.4-amd64.msi"  # Consider using the latest version if available
           $installerPath = "$env:TEMP\tailscale.msi"
           Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
           Start-Process msiexec.exe -ArgumentList "/i "$installerPath" /quiet /norestart" -Wait  # Fixed invalid argument list
