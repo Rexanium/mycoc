@@ -59,7 +59,7 @@ jobs:
           $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.88.4-amd64.msi"  # Consider using the latest version if available
           $installerPath = "$env:TEMP\tailscale.msi"
           Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
-          Start-Process msiexec.exe -ArgumentList "/i "$installerPath" /quiet /norestart" -Wait  # Fixed invalid argument list
+          Start-Process msiexec.exe -ArgumentList "/i ","$installerPath","/quiet", "/norestart" -Wait  # Fixed invalid argument list
           Remove-Item $installerPath -Force
 
       - name: Establish Tailscale Connection
