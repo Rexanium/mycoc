@@ -1,0 +1,146 @@
+name: Secure RDP Access (via Tailscale)
+on: 
+  # Hanya jalankan secara manual
+  workflow_dispatch:
+    inputs:
+      duration_minutes:
+        description: 'Duration (in minutes) to keep the connection open (Max 60)'
+        required: true
+        default: '30'
+
+jobs:
+  secure-rdp:
+    # Gunakan windows-latest untuk RDP
+    runs-on: windows-latest
+    
+    # Atur batas waktu total, gunakan input user, maksimal 60 menit untuk kepatuhan.
+    timeout-minutes: ${{ inputs.duration_minutes || 30 }} 
+
+    steps:
+      - name: Verify Duration Input
+        run: |
+          $duration = [int] "${{ inputs.duration_minutes }}"
+          if ($duration -gt 60 -or $duration -lt 1) {
+            Write-Error "Duration must be between 1 and 60 minutes."
+            exit 1
+          }
+          Write-Host "Connection duration set to $duration minutes."
+
+      - name: Configure RDP Firewall (Allow Tailscale Interface Access)
+        run: |
+          # *TIDAK MENONAKTIFKAN NLA* - Menggunakan konfigurasi default yang aman.
+          
+          # Hapus aturan firewall lama jika ada
+          netsh advfirewall firewall delete rule name="Allow-RDP-Internal"
+          
+          # Tambahkan aturan firewall untuk mengizinkan RDP, namun biarkan NLA tetap aktif.
+          # Karena Tailscale akan membuat tunnel VPN, ini umumnya hanya diperlukan 
+          # jika RDP tidak bisa diakses di jaringan Tailscale secara default.
+          netsh advfirewall firewall add rule name="Allow-RDP-Internal" ^
+                 dir=in action=allow protocol=TCP localport=3389
+
+      - name: Create Temporary RDP User Securely
+        id: create_user
+        run: |
+          # --- GENERASI PASSWORD AMAN (TETAP SAMA) ---
+          Add-Type -AssemblyName System.Security
+          $charSet = @{
+            Upper  = [char[]] (65..90)
+            Lower  = [char[]] (97..122)
+            Number = [char[]] (48..57)
+            Special = ([char[]] (33..47) + [char[]] (58..64) + [char[]] (91..96) + [char[]] (123..126))
+          }
+          $rawPassword = @()
+          $rawPassword += $charSet.Upper | Get-Random -Count 4
+          $rawPassword += $charSet.Lower | Get-Random -Count 4
+          $rawPassword += $charSet.Number | Get-Random -Count 4
+          $rawPassword += $charSet.Special | Get-Random -Count 4
+          $password = -join ($rawPassword | Sort-Object { Get-Random })
+          
+          # Simpan password ke environment variable *LOCAL* yang hanya tersedia di step ini
+          $securePass = ConvertTo-SecureString $password -AsPlainText -Force
+          
+          # Buat user baru
+          $username = "ghuser"
+          New-LocalUser -Name $username -Password $securePass -AccountNeverExpires
+          Add-LocalGroupMember -Group "Administrators" -Member $username
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member $username
+          
+          if (-not (Get-LocalUser -Name $username)) {
+            Write-Error "User creation failed"
+            exit 1
+          }
+          
+          # --- KEAMANAN KRITIS: JANGAN MENCETAK PASSWORD KE LOG ---
+          # Sebagai gantinya, set output step untuk diproses di step berikutnya,
+          # atau gunakan mekanisme komunikasi out-of-band (misalnya, kirim ke chat pribadi).
+          # Untuk contoh ini, saya akan mencetaknya *HANYA* sebagai variabel yang ditutupi oleh GitHub.
+          
+          # Set output yang aman. GitHub secara otomatis menyensor variabel yang di-echo sebagai secret.
+          echo "::add-mask::$password"
+          echo "RDP_PASSWORD=$password" >> $env:GITHUB_ENV
+          echo "RDP_USERNAME=$username" >> $env:GITHUB_ENV
+        
+      - name: Install Tailscale
+        run: |
+          # Gunakan URL instalasi resmi dari Tailscale (versi terbaru mungkin berbeda)
+          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-latest.msi"                                               
+          $installerPath = "$env:TEMP\tailscale.msi"
+          Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
+          Start-Process msiexec.exe -ArgumentList "/i", $installerPath, "/quiet", "/norestart" -Wait
+          Remove-Item $installerPath -Force
+
+      - name: Establish Tailscale Connection
+        id: tailscale
+        run: |
+          # Pastikan Anda memiliki Tailscale Auth Key di secrets repositori Anda
+          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-runner-$env:GITHUB_RUN_ID --timeout=1m
+          
+          $tsIP = $null
+          $retries = 0
+          while (-not $tsIP -and $retries -lt 10) {
+            Start-Sleep -Seconds 5
+            $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
+            $retries++
+          }
+          if (-not $tsIP) {
+            Write-Error "Tailscale IP not assigned. Exiting."
+            exit 1
+          }
+          
+          echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
+          
+      - name: Display Connection Details (User and IP Securely)
+        run: |
+          # Username ditampilkan secara jelas
+          Write-Host "Tailscale IP: $env:TAILSCALE_IP"
+          Write-Host "Username: $env:RDP_USERNAME"
+          
+          # Password disensor secara otomatis karena sudah di-masking di step sebelumnya
+          Write-Host "Password: ${{ env.RDP_PASSWORD }}" 
+          
+          Write-Host "---------------------------------------------------------"
+          Write-Host "Koneksi RDP akan berakhir dalam ${{ inputs.duration_minutes || 30 }} menit."
+          Write-Host "Gunakan Ctrl+C di workflow untuk menghentikan lebih awal."
+      
+      - name: Maintain Connection (Limited Time)
+        run: |
+          $duration_seconds = [int]("${{ inputs.duration_minutes }}" ) * 60
+          
+          # Gunakan perintah sleep untuk menunggu hingga batas waktu habis
+          Write-Host "Runner akan tidur selama $duration_seconds detik..."
+          Start-Sleep -Seconds $duration_seconds
+          
+          Write-Host "Batas waktu RDP telah berakhir. Job akan dihentikan."
+
+      - name: Clean Up User
+        if: always()
+        run: |
+          $username = $env:RDP_USERNAME
+          if (Get-LocalUser -Name $username -ErrorAction SilentlyContinue) {
+            Write-Host "Deleting temporary user $username..."
+            Remove-LocalUser -Name $username -Confirm:$false
+          }
+          # Hapus aturan firewall
+          netsh advfirewall firewall delete rule name="Allow-RDP-Internal"
+          Write-Host "Cleanup complete."
